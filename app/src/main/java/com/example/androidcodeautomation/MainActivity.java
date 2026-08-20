@@ -31,7 +31,7 @@ public class MainActivity extends Activity {
     private boolean isTaskRunning = false;
 
     // Target URL constant
-    private static final String TARGET_URL = "https://www.scanpack.com/ch-qronstick2026-ffks";
+    private static final String TARGET_URL = "https://www.scanpack.com/ph-ft-goldenticketchancetowin?utm_medium=PRIF&utm_campaign=GoldenSpinWheel&utm_source=PRIF";
     private static final int CAMERA_PERMISSION_CODE = 100;
 
     @Override
