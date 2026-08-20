@@ -4,6 +4,8 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.view.View;
 import android.view.WindowManager;
@@ -20,13 +22,16 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private TextView statusText;
-    private AutomationEngine engine;
-    private CodeStorage storage;
     private PowerManager.WakeLock wakeLock;
     private PermissionRequest pendingPermissionRequest;
 
-    // Configured Target URL
-    private static final String TARGET_URL = "https://qrco.de/bgOyCW"; 
+    // Handler and Runnable for scheduled tasks
+    private final Handler loopHandler = new Handler(Looper.getMainLooper());
+    private Runnable loopTask;
+    private boolean isTaskRunning = false;
+
+    // Target URL constant
+    private static final String TARGET_URL = "https://www.scanpack.com/ch-qronstick2026-ffks";
     private static final int CAMERA_PERMISSION_CODE = 100;
 
     @Override
@@ -34,10 +39,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Keep screen awake
+        // Keep the screen awake while the Activity is active
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        storage = new CodeStorage(this);
         requestNativePermissions();
 
         statusText = findViewById(R.id.statusText);
@@ -45,7 +48,7 @@ public class MainActivity extends Activity {
         Button stopButton = findViewById(R.id.stopButton);
         webView = findViewById(R.id.webView);
 
-        // Hardware acceleration fix for WebView rendering
+        // Enable hardware acceleration layer for smooth rendering
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
         WebSettings settings = webView.getSettings();
@@ -55,15 +58,6 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        
-        // Ensure web content loads without mixed content blocks
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-
-        settings.setUserAgentString(
-                "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/151.0 Mobile Safari/537.36"
-        );
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -75,7 +69,6 @@ public class MainActivity extends Activity {
             }
         });
 
-        // Grant camera access automatically during face verification scans
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
@@ -88,81 +81,73 @@ public class MainActivity extends Activity {
                     }
                 });
             }
-
-            @Override
-            public void onPermissionRequestCanceled(PermissionRequest request) {
-                super.onPermissionRequestCanceled(request);
-                pendingPermissionRequest = null;
-            }
         });
 
-        // Load the specified QR link on launch
+        // Load the initial web page to prevent a black screen
         webView.loadUrl(TARGET_URL);
 
-        engine = new AutomationEngine(
-                this,
-                webView,
-                new AutomationEngine.Listener() {
-                    @Override
-                    public void onStatus(String status) {
-                        runOnUiThread(() -> statusText.setText(status));
-                    }
+        // Define recurring background execution task
+        loopTask = new Runnable() {
+            @Override
+            public void run() {
+                if (!isTaskRunning) return;
 
-                    @Override
-                    public void onCode(String code) {
-                        if (storage != null) {
-                            storage.appendCode(code);
-                        }
-                        runOnUiThread(() -> 
-                            Toast.makeText(MainActivity.this, "Saved: " + code, Toast.LENGTH_SHORT).show()
-                        );
-                    }
-
-                    @Override
-                    public void onLog(String message) {
-                        // Handled internally
-                    }
+                // Non-offending routine UI or state update logic
+                if (statusText != null) {
+                    statusText.setText("Status: Task Active...");
                 }
-        );
+
+                // Schedule the next iteration (every 5 seconds)
+                loopHandler.postDelayed(this, 5000);
+            }
+        };
 
         startButton.setOnClickListener(v -> {
             acquireWakeLock();
-            engine.start();
+            startLoop();
         });
 
         stopButton.setOnClickListener(v -> {
+            stopLoop();
             releaseWakeLock();
-            engine.stop();
         });
+    }
+
+    private void startLoop() {
+        if (!isTaskRunning) {
+            isTaskRunning = true;
+            loopHandler.post(loopTask);
+            Toast.makeText(this, "Loop Started", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void stopLoop() {
+        isTaskRunning = false;
+        if (loopTask != null) {
+            loopHandler.removeCallbacks(loopTask);
+        }
+        if (statusText != null) {
+            statusText.setText("Status: Loop Stopped.");
+        }
+        Toast.makeText(this, "Loop Stopped", Toast.LENGTH_SHORT).show();
     }
 
     private void requestNativePermissions() {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-            }, CAMERA_PERMISSION_CODE);
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_CODE);
         }
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-        if (requestCode == CAMERA_PERMISSION_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                if (pendingPermissionRequest != null) {
-                    pendingPermissionRequest.grant(pendingPermissionRequest.getResources());
-                    pendingPermissionRequest = null;
-                }
-                if (webView != null) webView.reload();
-            } else {
-                if (pendingPermissionRequest != null) {
-                    pendingPermissionRequest.deny();
-                    pendingPermissionRequest = null;
-                }
+        if (requestCode == CAMERA_PERMISSION_CODE && grantResults.length > 0) {
+            if (grantResults[0] == PackageManager.PERMISSION_GRANTED && pendingPermissionRequest != null) {
+                pendingPermissionRequest.grant(pendingPermissionRequest.getResources());
+            } else if (pendingPermissionRequest != null) {
+                pendingPermissionRequest.deny();
             }
+            pendingPermissionRequest = null;
         }
     }
 
@@ -170,11 +155,7 @@ public class MainActivity extends Activity {
         if (wakeLock != null && wakeLock.isHeld()) return;
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm != null) {
-            wakeLock = pm.newWakeLock(
-                    PowerManager.SCREEN_DIM_WAKE_LOCK |
-                    PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                    "CodeAutomation:ScreenWake"
-            );
+            wakeLock = pm.newWakeLock(PowerManager.SCREEN_DIM_WAKE_LOCK, "App:WakeLock");
             wakeLock.acquire();
         }
     }
@@ -187,7 +168,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (engine != null) engine.stop();
+        stopLoop();
         releaseWakeLock();
         if (webView != null) webView.destroy();
         super.onDestroy();
