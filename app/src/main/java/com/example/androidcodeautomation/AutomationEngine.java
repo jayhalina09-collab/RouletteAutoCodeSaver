@@ -1,23 +1,11 @@
 package com.example.androidcodeautomation;
 
 import android.content.Context;
-import android.content.SharedPreferences;
-import android.webkit.JavascriptInterface;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.webkit.WebView;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.text.TextRecognition;
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
-
-import java.io.FileOutputStream;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class AutomationEngine {
 
@@ -27,215 +15,155 @@ public class AutomationEngine {
         void onLog(String message);
     }
 
-    private static final String URL = "https://qrco.de/bgOyCW";
-    private static final long SPIN_WAIT = 15000L;
-
     private final Context context;
     private final WebView webView;
     private final Listener listener;
-    private final SharedPreferences prefs;
-    private final Set<String> knownCodes = new HashSet<>();
-    private final android.os.Handler handler = new android.os.Handler();
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     private boolean running = false;
-    private boolean startedFlow = false;
+    private boolean waitingForResult = false;
 
     public AutomationEngine(Context context, WebView webView, Listener listener) {
-        this.context = context.getApplicationContext();
+        this.context = context;
         this.webView = webView;
         this.listener = listener;
-
-        prefs = this.context.getSharedPreferences("roulette_codes", Context.MODE_PRIVATE);
-        knownCodes.addAll(prefs.getStringSet("roulette_saved", new HashSet<>()));
-
-        webView.addJavascriptInterface(new JsBridge(), "AndroidAutomation");
     }
 
     public void start() {
-        if (running) return;
         running = true;
-        listener.onStatus("Opening roulette page...");
-        openPage();
+        waitingForResult = false;
+        listener.onStatus("Status: Automation Started. Scanning DOM...");
+        scanAndExecuteFlow();
     }
 
     public void stop() {
         running = false;
+        waitingForResult = false;
         handler.removeCallbacksAndMessages(null);
-        listener.onStatus("Stopped");
+        listener.onStatus("Status: Automation Stopped.");
     }
 
-    private void openPage() {
+    private void scanAndExecuteFlow() {
         if (!running) return;
 
-        startedFlow = false;
-
-        webView.post(() -> {
-            webView.stopLoading();
-            webView.loadUrl(URL);
-        });
-
-        handler.postDelayed(this::scanPage, 3000);
-    }
-
-    private void scanPage() {
-        if (!running) return;
-
+        // Extract DOM text to inspect page state
         String js =
-            "(function(){var a=[];" +
-            "document.querySelectorAll('*').forEach(function(e){" +
-            "var t=(e.innerText||e.textContent||'').trim();" +
-            "if(t)a.push(t);});" +
-            "return JSON.stringify(a);})()";
+                "(function() {" +
+                "  var bodyText = (document.body ? document.body.innerText || document.body.textContent : '').toUpperCase();" +
+                "  if (bodyText.indexOf('CONGRATS NANALO KA KATROPA!') !== -1 || bodyText.indexOf('WINNING CODE') !== -1) {" +
+                "    var inputs = document.querySelectorAll('input');" +
+                "    for (var i = 0; i < inputs.length; i++) {" +
+                "      var val = (inputs[i].value || '').trim();" +
+                "      var m = val.match(/\\b[A-Z0-9]{12}\\b/);" +
+                "      if (m) return JSON.stringify({state: 'WINNER', code: m[0]});" +
+                "    }" +
+                "    var match = bodyText.match(/\\b[A-Z0-9]{12}\\b/);" +
+                "    if (match) return JSON.stringify({state: 'WINNER', code: match[0]});" +
+                "  }" +
+                "  if (bodyText.indexOf('TRY AGAIN') !== -1) {" +
+                "    return JSON.stringify({state: 'TRY_AGAIN'});" +
+                "  }" +
+                "  if (bodyText.indexOf('SPIN THE GOLDEN WHEEL') !== -1) {" +
+                "    return JSON.stringify({state: 'GOLDEN_WHEEL'});" +
+                "  }" +
+                "  if (bodyText.indexOf('SPIN') !== -1) {" +
+                "    return JSON.stringify({state: 'SPIN_READY'});" +
+                "  }" +
+                "  return JSON.stringify({state: 'SCANNING'});" +
+                "})()";
 
         webView.evaluateJavascript(js, value -> {
-            String text = unquote(value);
+            if (!running) return;
 
-            if (!startedFlow && contains(text, "SPIN THE GOLDEN WHEEL")) {
-                listener.onStatus("Clicking SPIN THE GOLDEN WHEEL...");
-                clickText("SPIN THE GOLDEN WHEEL");
-                startedFlow = true;
-                handler.postDelayed(this::clickSpin, 3000);
-                return;
-            }
+            String unquoted = unquote(value);
 
-            if (contains(text, "CONGRATS NANALO KA!")) {
-                listener.onStatus("Winner detected. Reading code...");
-                String code = extractRouletteCode(text);
-
-                if (code == null) {
-                    readCodeWithOCR();
-                    return;
-                }
-
-                if (code != null) {
-                    saveRouletteCode(code);
-                    handler.postDelayed(this::openPage, 2000);
+            if (unquoted.contains("\"state\":\"WINNER\"")) {
+                String code = extractJsonField(unquoted, "code");
+                if (code != null && !code.isEmpty()) {
+                    listener.onStatus("Code Found: " + code);
+                    listener.onCode(code);
+                    waitingForResult = false;
+                    // Restart flow after code extraction
+                    handler.postDelayed(this::scanAndExecuteFlow, 3000);
                     return;
                 }
             }
 
-            if (contains(text, "TRY AGAIN NEXT TIME")) {
-                listener.onStatus("Try again. Restarting...");
-                handler.postDelayed(this::openPage, 2000);
+            if (unquoted.contains("\"state\":\"TRY_AGAIN\"")) {
+                listener.onStatus("Result: Try Again detected. Restarting flow...");
+                waitingForResult = false;
+                // Native tap on "TRY AGAIN" button (Center Bottom)
+                performNativeTouch(0.5f, 0.85f);
+                handler.postDelayed(this::scanAndExecuteFlow, 3000);
                 return;
             }
 
-            handler.postDelayed(this::scanPage, 1500);
+            if (!waitingForResult) {
+                if (unquoted.contains("\"state\":\"GOLDEN_WHEEL\"")) {
+                    listener.onStatus("Action: Tapping 'SPIN THE GOLDEN WHEEL'...");
+                    // Center screen native tap for Golden Wheel trigger
+                    performNativeTouch(0.5f, 0.65f);
+                    handler.postDelayed(this::scanAndExecuteFlow, 2500);
+                    return;
+                }
+
+                if (unquoted.contains("\"state\":\"SPIN_READY\"")) {
+                    listener.onStatus("Action: Tapping 'SPIN'. Waiting 15s for results...");
+                    waitingForResult = true;
+                    // Center native tap for SPIN button
+                    performNativeTouch(0.5f, 0.70f);
+                    // Schedule result inspection after 15-second wheel spin delay
+                    handler.postDelayed(this::scanAndExecuteFlow, 15000);
+                    return;
+                }
+            }
+
+            // Retry state scan if no active triggers matched
+            handler.postDelayed(this::scanAndExecuteFlow, 2000);
         });
     }
 
-    private void clickSpin() {
-        if (!running) return;
+    /**
+     * Sends hardware-level MotionEvents to the WebView using relative X/Y screen percentages.
+     */
+    private void performNativeTouch(float xPercent, float yPercent) {
+        if (webView == null || webView.getWidth() == 0 || webView.getHeight() == 0) return;
 
-        listener.onStatus("Clicking SPIN...");
-        clickText("SPIN");
+        float x = webView.getWidth() * xPercent;
+        float y = webView.getHeight() * yPercent;
 
-        handler.postDelayed(() -> {
-            listener.onStatus("Checking roulette result...");
-            scanPage();
-        }, SPIN_WAIT);
+        long downTime = SystemClock.uptimeMillis();
+        long eventTime = SystemClock.uptimeMillis();
+
+        MotionEvent downEvent = MotionEvent.obtain(
+                downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
+        );
+        MotionEvent upEvent = MotionEvent.obtain(
+                downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
+        );
+
+        webView.dispatchTouchEvent(downEvent);
+        webView.dispatchTouchEvent(upEvent);
+
+        downEvent.recycle();
+        upEvent.recycle();
     }
 
-    private void clickText(String wanted) {
-        String js =
-            "(function(){var n=document.querySelectorAll('button,a,input,div,span');" +
-            "for(var i=0;i<n.length;i++){" +
-            "var t=(n[i].innerText||n[i].textContent||n[i].value||'').trim();" +
-            "if(t.toLowerCase().includes('" + wanted.toLowerCase() + "')){" +
-            "n[i].click();return 'ok';}}" +
-            "return 'no';})()";
-
-        webView.evaluateJavascript(js, null);
-    }
-
-    private String extractRouletteCode(String text) {
-        Pattern p = Pattern.compile("\\b[A-Z0-9]{12}\\b");
-        Matcher m = p.matcher(text.replace("\\n"," "));
-        while(m.find()) {
-            String c = m.group();
-            if(c.matches(".*[A-Z].*") && c.matches(".*\\d.*"))
-                return c;
+    private String unquote(String input) {
+        if (input == null) return "";
+        if (input.startsWith("\"") && input.endsWith("\"")) {
+            input = input.substring(1, input.length() - 1);
         }
-        return null;
+        return input.replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
-
-    private void readCodeWithOCR() {
-        webView.post(() -> {
-            Bitmap bitmap = Bitmap.createBitmap(webView.getWidth(), webView.getHeight(), Bitmap.Config.ARGB_8888);
-            Canvas canvas = new Canvas(bitmap);
-            webView.draw(canvas);
-
-            InputImage image = InputImage.fromBitmap(bitmap, 0);
-            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-                    .process(image)
-                    .addOnSuccessListener(result -> {
-                        String code = extractRouletteCode(result.getText());
-                        if (code != null) {
-                            saveRouletteCode(code);
-                            handler.postDelayed(this::openPage, 2000);
-                        } else {
-                            listener.onLog("OCR found no valid 12 character code");
-                            handler.postDelayed(this::scanPage, 1500);
-                        }
-                    })
-                    .addOnFailureListener(e -> {
-                        listener.onLog("OCR error: " + e.getMessage());
-                        handler.postDelayed(this::scanPage, 1500);
-                    });
-        });
-    }
-
-    private void saveRouletteCode(String code) {
-        if(knownCodes.contains(code)) {
-            listener.onLog("Duplicate skipped: " + code);
-            return;
-        }
-
-        knownCodes.add(code);
-        prefs.edit().putStringSet("roulette_saved", new HashSet<>(knownCodes)).apply();
-
-        try {
-            FileOutputStream fos = context.openFileOutput(
-                    "Save_codesroulette.txt",
-                    Context.MODE_APPEND
-            );
-
-            String line = code + " - " +
-                    new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                    .format(new Date()) + "\n";
-
-            fos.write(line.getBytes());
-            fos.close();
-
-        } catch(Exception e) {
-            listener.onLog("File error: " + e.getMessage());
-        }
-
-        listener.onCode(code);
-        listener.onLog("Saved roulette code: " + code);
-        listener.onStatus("Saved. Starting next spin...");
-    }
-
-    private boolean contains(String a,String b){
-        return a.toLowerCase(Locale.US)
-                .contains(b.toLowerCase(Locale.US));
-    }
-
-    private String unquote(String v){
-        if(v==null)return "";
-        if(v.startsWith("\"")&&v.endsWith("\""))
-            v=v.substring(1,v.length()-1);
-
-        return v.replace("\\\"","\"")
-                .replace("\\n","\n")
-                .replace("\\\\","\\");
-    }
-
-    public class JsBridge {
-        @JavascriptInterface
-        public void log(String msg){
-            listener.onLog(msg);
-        }
+    private String extractJsonField(String json, String fieldName) {
+        String key = "\"" + fieldName + "\":\"";
+        int start = json.indexOf(key);
+        if (start == -1) return null;
+        start += key.length();
+        int end = json.indexOf("\"", start);
+        if (end == -1) return null;
+        return json.substring(start, end);
     }
 }
