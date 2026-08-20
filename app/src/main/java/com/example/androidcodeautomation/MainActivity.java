@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.PowerManager;
+import android.view.View;
 import android.view.WindowManager;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -24,6 +25,8 @@ public class MainActivity extends Activity {
     private PowerManager.WakeLock wakeLock;
     private PermissionRequest pendingPermissionRequest;
 
+    // Configured Target URL
+    private static final String TARGET_URL = "https://qrco.de/bgCu4p"; 
     private static final int CAMERA_PERMISSION_CODE = 100;
 
     @Override
@@ -31,13 +34,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Keep screen active
+        // Keep screen awake
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // Initialize file storage target
         storage = new CodeStorage(this);
-
-        // Request runtime permissions on launch
         requestNativePermissions();
 
         statusText = findViewById(R.id.statusText);
@@ -45,7 +45,9 @@ public class MainActivity extends Activity {
         Button stopButton = findViewById(R.id.stopButton);
         webView = findViewById(R.id.webView);
 
-        // Configure WebSettings for full feature compatibility
+        // Hardware acceleration fix for WebView rendering
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -54,15 +56,26 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
+        
+        // Ensure web content loads without mixed content blocks
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
         settings.setUserAgentString(
                 "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/151.0 Mobile Safari/537.36"
         );
 
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (statusText != null) {
+                    statusText.setText("Status: Page Loaded.");
+                }
+            }
+        });
 
-        // Handle camera permissions for face verification scans
+        // Grant camera access automatically during face verification scans
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
@@ -83,6 +96,9 @@ public class MainActivity extends Activity {
             }
         });
 
+        // Load the specified QR link on launch
+        webView.loadUrl(TARGET_URL);
+
         engine = new AutomationEngine(
                 this,
                 webView,
@@ -94,7 +110,6 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onCode(String code) {
-                        // Automatically append code to Downloads/save_codeseoulette.txt
                         if (storage != null) {
                             storage.appendCode(code);
                         }
@@ -105,7 +120,7 @@ public class MainActivity extends Activity {
 
                     @Override
                     public void onLog(String message) {
-                        // Handled via standard Logcat
+                        // Handled internally
                     }
                 }
         );
@@ -119,8 +134,6 @@ public class MainActivity extends Activity {
             releaseWakeLock();
             engine.stop();
         });
-
-        statusText.setText("Status: Ready.");
     }
 
     private void requestNativePermissions() {
