@@ -26,7 +26,7 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingPermissionRequest;
 
     // Configured Target URL
-    private static final String TARGET_URL = "https://qrco.de/bgCu4p"; 
+    private static final String TARGET_URL = "https://qrco.de/bgOyCW"; 
     private static final int CAMERA_PERMISSION_CODE = 100;
 
     @Override
