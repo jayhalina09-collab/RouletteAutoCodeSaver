@@ -1,0 +1,30 @@
+ORIGINAL FLOW TRANSFERRED FROM PhoneFlow.ps1
+
+URL:
+https://www.scanpack.com/ch-qronstick2026-rc
+
+MAIN FLOW:
+- Open fresh Chrome/page
+- Enter URL
+- Wait for "JOIN NOW" (40 seconds in original)
+- Click "JOIN NOW"
+- Wait
+- Accept "Accept All Cookies" when present
+- Click "YES, I AM" when present
+- Extract 8-12 character uppercase alpha-numeric code
+- Require "REGISTER NOW"
+- Click "COPY CODE" when present
+- Check against all_codes.txt
+- Skip duplicate codes
+- Save latest code
+- Save timestamped code
+- Wait 300 seconds
+- Repeat
+
+ORIGINAL FILE OUTPUTS:
+registration_code.txt = latest code
+all_codes.txt = every unique code
+codes/code_YYYYMMDD_HHMMSS.txt = one code per run
+
+ANDROID IMPLEMENTATION:
+The same flow is implemented in AutomationEngine.java using WebView DOM text matching instead of external ADB/PowerShell control.
